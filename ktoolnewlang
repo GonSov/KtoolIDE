@@ -1,295 +1,291 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>KTool IDE</title>
-  <style>
-    body {
-      margin: 0;
-      font-family: monospace;
-      background: #1e1e1e;
-      color: #ffffff;
-    }
-    #editor {
-      height: 50vh;
-      width: 100%;
-    }
-    #canvas {
-      border: 1px solid #555;
-      background: #111;
-      width: 200px;
-      height: 200px;
-    }
-    #output {
-      background: #000;
-      padding: 10px;
-      height: 15vh;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      color: #0f0;
-    }
-    #ui {
-      padding: 10px;
-    }
-    button {
-      margin: 5px;
-      padding: 5px 10px;
-      background: #007acc;
-      color: white;
-      border: none;
-      font-size: 14px;
-    }
-  </style>
+<meta charset="UTF-8" />
+<title>KTool Game Engine IDE</title>
+<style>
+  body {
+    margin: 0; font-family: monospace; background: #1e1e1e; color: #eee;
+  }
+  #editor { height: 50vh; width: 100%; }
+  #canvas { border: 1px solid #555; background: #111; width: 400px; height: 300px; display: block; margin: 10px auto; }
+  #output { background: #000; padding: 10px; height: 15vh; overflow-y: auto; white-space: pre-wrap; color: #0f0; }
+  #ui { text-align: center; padding: 10px; }
+  button { margin: 5px; padding: 5px 10px; background: #007acc; color: white; border: none; font-size: 14px; cursor: pointer; }
+</style>
 </head>
 <body>
-  <h2 style="padding: 10px;">KTool IDE</h2>
+  <h2 style="text-align:center;">KTool Game Engine IDE</h2>
   <div id="editor"></div>
   <div id="ui">
     <button onclick="runKTool()">▶ Run</button>
-    <canvas id="canvas" width="200" height="200"></canvas>
-    <div id="buttons"></div>
   </div>
-  <pre id="output">// Output will appear here</pre>
+  <canvas id="canvas" width="400" height="300"></canvas>
+  <pre id="output">// Output here</pre>
 
-  <script src="https://unpkg.com/monaco-editor@latest/min/vs/loader.js"></script>
-  <script>
-    let editor;
-    const variables = {};
-    const intervals = [];
-    const keyBindings = {}; // NEW: for onKey handlers
+<script src="https://unpkg.com/monaco-editor@latest/min/vs/loader.js"></script>
+<script>
+let editor;
+const variables = {};
+const sprites = {};
+let keysPressed = {};
+let running = false;
+let gameLoopId;
 
-    require.config({ paths: { vs: "https://unpkg.com/monaco-editor@latest/min/vs" } });
-    require(["vs/editor/editor.main"], function () {
-      editor = monaco.editor.create(document.getElementById("editor"), {
-        value: `fun main () () {
-    val name = "Player" ;
-    println("Hello, $name!") ;
+require.config({ paths: { vs: "https://unpkg.com/monaco-editor@latest/min/vs" } });
+require(["vs/editor/editor.main"], () => {
+  editor = monaco.editor.create(document.getElementById("editor"), {
+    value: `fun main () () {
+  val name = "Player" ;
+  println("Welcome, $name!") ;
 
-    onKey "ArrowRight" {
-        println("You moved right!") ;
-    }
+  sprite "hero" {
+    model = "🧍" ;
+    x = 50 ;
+    y = 50 ;
+    speed = 3 ;
+  }
 
-    onKey " " {
-        println("Jump!") ;
-    }
-
-    sprite "hero" {
-        model = "🧍" ;
-        interactable = true ;
-    }
-
-    canvas () {
-        width = 200 ;
-        height = 200 ;
-        angle = 45 ;
-    }
-
-    button "ClickMe" {
-        text = "Click me!" ;
-        onClick {
-            println("You clicked the button!") ;
-        }
-    }
+  onKey "ArrowRight" {
+    move("hero", speed, 0) ;
+  }
+  onKey "ArrowLeft" {
+    move("hero", -speed, 0) ;
+  }
+  onKey "ArrowUp" {
+    move("hero", 0, -speed) ;
+  }
+  onKey "ArrowDown" {
+    move("hero", 0, speed) ;
+  }
 }`,
-        language: "javascript",
-        theme: "vs-dark",
-        fontSize: 14,
-        minimap: { enabled: false }
-      });
+    language: "javascript",
+    theme: "vs-dark",
+    fontSize: 14,
+    minimap: { enabled: false },
+  });
+});
+
+function runKTool() {
+  clearOutput();
+  clearCanvas();
+  clearInterval(gameLoopId);
+  running = true;
+  keysPressed = {};
+  Object.keys(variables).forEach(k => delete variables[k]);
+  Object.keys(sprites).forEach(k => delete sprites[k]);
+  keyBindings = {};
+
+  const code = editor.getValue();
+  interpretKTool(code).then(() => {
+    if (running) startGameLoop();
+  });
+}
+
+function clearOutput() {
+  document.getElementById("output").textContent = "";
+}
+function log(text) {
+  document.getElementById("output").textContent += text + "\n";
+}
+function clearCanvas() {
+  const ctx = document.getElementById("canvas").getContext("2d");
+  ctx.clearRect(0, 0, 400, 300);
+}
+function drawSprite(sprite) {
+  const ctx = document.getElementById("canvas").getContext("2d");
+  ctx.font = "30px monospace";
+  ctx.fillText(sprite.model, sprite.x, sprite.y);
+}
+
+let keyBindings = {};
+
+window.addEventListener("keydown", e => {
+  keysPressed[e.key] = true;
+  if(keyBindings[e.key]) {
+    keyBindings[e.key].forEach(async (fn) => {
+      await fn();
     });
+  }
+});
+window.addEventListener("keyup", e => {
+  keysPressed[e.key] = false;
+});
 
-    function runKTool() {
-      clearIntervals();
-      clearOutput();
-      clearCanvas();
-      clearButtons();
-      Object.keys(variables).forEach(k => delete variables[k]);
-      Object.keys(keyBindings).forEach(k => delete keyBindings[k]);
+async function interpretKTool(code) {
+  const lines = code.split("\n").map(l => l.trim()).filter(l => l.length);
+  let i = 0;
 
-      const code = editor.getValue();
-      interpretKTool(code);
+  async function executeLine(line) {
+    if (line.startsWith("println(")) {
+      const match = line.match(/println\((.*)\)\s*;/);
+      if (match) {
+        let text = match[1].replace(/^"|"$/g, "");
+        text = text.replace(/\$([a-zA-Z_]+)/g, (_, name) => variables[name] ?? `$${name}`);
+        log(text);
+      }
     }
-
-    function clearOutput() {
-      document.getElementById("output").textContent = "";
+    else if (line.startsWith("val ") || line.startsWith("var ")) {
+      const match = line.match(/(val|var)\s+([a-zA-Z_]+)\s*=\s*(.*)\s*;/);
+      if (match) {
+        let [, , name, value] = match;
+        value = value.replace(/^"|"$/g, "");
+        if (!isNaN(value)) value = Number(value);
+        variables[name] = value;
+      }
     }
-
-    function log(text) {
-      document.getElementById("output").textContent += text + "\n";
+    else if (line.includes("+=")) {
+      const match = line.match(/([a-zA-Z_]+)\s*\+=\s*(\d+)\s*;/);
+      if (match) {
+        const [, name, amount] = match;
+        variables[name] = (variables[name] || 0) + Number(amount);
+      }
     }
-
-    function clearCanvas() {
-      const ctx = document.getElementById("canvas").getContext("2d");
-      ctx.clearRect(0, 0, 200, 200);
+    else if (line.includes("readln()")) {
+      const name = line.match(/([a-zA-Z_]+)\s*=\s*readln\(\)/)[1];
+      const input = prompt("Input value:");
+      variables[name] = input;
     }
-
-    function drawSprite(symbol, x = 90, y = 90) {
-      const ctx = document.getElementById("canvas").getContext("2d");
-      ctx.font = "20px monospace";
-      ctx.fillText(symbol, x, y);
-    }
-
-    function clearButtons() {
-      document.getElementById("buttons").innerHTML = "";
-    }
-
-    function addButton(label, callback) {
-      const btn = document.createElement("button");
-      btn.innerText = label;
-      btn.onclick = callback;
-      document.getElementById("buttons").appendChild(btn);
-    }
-
-    function clearIntervals() {
-      for (const i of intervals) clearInterval(i);
-      intervals.length = 0;
-    }
-
-    async function interpretKTool(code) {
-      const lines = code.split("\n").map(l => l.trim()).filter(l => l.length);
-      let i = 0;
-
-      async function executeLine(line) {
-        if (line.startsWith("println(")) {
-          const match = line.match(/println\((.*)\)\s*;/);
-          if (match) {
-            let text = match[1].replace(/^"|"$/g, "");
-            text = text.replace(/\$([a-zA-Z_]+)/g, (_, name) => variables[name] ?? `$${name}`);
-            log(text);
-          }
+    else if (line.startsWith("every ")) {
+      const match = line.match(/every\s+(\d+)ms\s*\{/);
+      if (match) {
+        const time = Number(match[1]);
+        const block = [];
+        i++;
+        while (!lines[i].includes("}")) {
+          block.push(lines[i]);
+          i++;
         }
-
-        else if (line.startsWith("val ") || line.startsWith("var ")) {
-          const match = line.match(/(val|var)\s+([a-zA-Z_]+)\s*=\s*(.*)\s*;/);
-          if (match) {
-            let [, , name, value] = match;
-            value = value.replace(/^"|"$/g, "");
-            if (!isNaN(value)) value = Number(value);
-            variables[name] = value;
-          }
-        }
-
-        else if (line.includes("+=")) {
-          const match = line.match(/([a-zA-Z_]+)\s*\+=\s*(\d+)\s*;/);
-          if (match) {
-            const [, name, amount] = match;
-            variables[name] = (variables[name] || 0) + Number(amount);
-          }
-        }
-
-        else if (line.includes("readln()")) {
-          const name = line.match(/([a-zA-Z_]+)\s*=\s*readln\(\)/)[1];
-          const input = prompt("Input value:");
-          variables[name] = input;
-        }
-
-        else if (line.startsWith("every ")) {
-          const match = line.match(/every\s+(\d+)ms\s*\{/);
-          if (match) {
-            const time = Number(match[1]);
-            const block = [];
-            i++;
-            while (!lines[i].includes("}")) {
-              block.push(lines[i]);
-              i++;
+        const interval = setInterval(() => {
+          for (const b of block) executeLine(b);
+        }, time);
+        intervals.push(interval);
+      }
+    }
+    else if (line.startsWith("wait until")) {
+      const condition = line.match(/wait until \((.*)\)/)[1];
+      return new Promise(resolve => {
+        const interval = setInterval(() => {
+          try {
+            const check = eval(condition.replace(/([a-zA-Z_]+)/g, m => `variables.${m}`));
+            if (check) {
+              clearInterval(interval);
+              resolve();
             }
-            const interval = setInterval(() => {
-              for (const b of block) executeLine(b);
-            }, time);
-            intervals.push(interval);
+          } catch {}
+        }, 200);
+      });
+    }
+    else if (line.startsWith('sprite ')) {
+      const match = line.match(/sprite\s+"(.*)"\s*\{/);
+      if (match) {
+        let spriteName = match[1];
+        let model = "⬛";
+        let x = 0;
+        let y = 0;
+        let speed = 0;
+        i++;
+        while (!lines[i].includes("}")) {
+          const inner = lines[i].trim();
+          if (inner.startsWith("model =")) {
+            model = inner.split("=")[1].replace(/["; ]/g, "");
           }
-        }
-
-        else if (line.startsWith("wait until")) {
-          const condition = line.match(/wait until \((.*)\)/)[1];
-          return new Promise(resolve => {
-            const interval = setInterval(() => {
-              try {
-                const check = eval(condition.replace(/([a-zA-Z_]+)/g, m => `variables.${m}`));
-                if (check) {
-                  clearInterval(interval);
-                  resolve();
-                }
-              } catch {}
-            }, 200);
-          });
-        }
-
-        else if (line.startsWith('sprite ')) {
-          const match = line.match(/sprite\s+"(.*)"\s*\{/);
-          if (match) {
-            let model = "⬛";
-            i++;
-            while (!lines[i].includes("}")) {
-              const inner = lines[i].trim();
-              if (inner.includes("model =")) {
-                model = inner.split("=")[1].replace(/["; ]/g, "");
-              }
-              i++;
-            }
-            drawSprite(model);
+          if (inner.startsWith("x =")) {
+            x = Number(inner.split("=")[1].replace(/["; ]/g, ""));
           }
+          if (inner.startsWith("y =")) {
+            y = Number(inner.split("=")[1].replace(/["; ]/g, ""));
+          }
+          if (inner.startsWith("speed =")) {
+            speed = Number(inner.split("=")[1].replace(/["; ]/g, ""));
+          }
+          i++;
         }
-
-        else if (line.startsWith("button ")) {
-          const match = line.match(/button\s+"(.*)"\s*\{/);
-          const label = match[1];
-          let onclickLines = [];
-
+        sprites[spriteName] = { model, x, y, speed };
+      }
+    }
+    else if (line.startsWith("button ")) {
+      const match = line.match(/button\s+"(.*)"\s*\{/);
+      const label = match[1];
+      let onclickLines = [];
+      i++;
+      while (!lines[i].includes("}")) {
+        const inner = lines[i];
+        if (inner.includes("onClick")) {
           i++;
           while (!lines[i].includes("}")) {
-            const inner = lines[i];
-            if (inner.includes("onClick")) {
-              i++;
-              while (!lines[i].includes("}")) {
-                onclickLines.push(lines[i]);
-                i++;
-              }
-            } else {
-              i++;
-            }
-          }
-
-          addButton(label, () => {
-            for (const b of onclickLines) executeLine(b);
-          });
-        }
-
-        else if (line.startsWith("onKey ")) {
-          const match = line.match(/onKey\s+"(.*)"\s*\{/);
-          const key = match[1];
-          const block = [];
-
-          i++;
-          while (!lines[i].includes("}")) {
-            block.push(lines[i]);
+            onclickLines.push(lines[i]);
             i++;
           }
-
-          keyBindings[key] = block;
-        }
-
-        else if (line.startsWith("canvas")) {
-          clearCanvas(); // just visual reset for now
+        } else {
+          i++;
         }
       }
-
-      while (i < lines.length) {
-        const line = lines[i];
-        await executeLine(line);
+      addButton(label, () => {
+        for (const b of onclickLines) executeLine(b);
+      });
+    }
+    else if (line.startsWith("onKey ")) {
+      const match = line.match(/onKey\s+"(.*)"\s*\{/);
+      const key = match[1];
+      const block = [];
+      i++;
+      while (!lines[i].includes("}")) {
+        block.push(lines[i]);
         i++;
       }
-
-      // Global key listener
-      window.onkeydown = async (e) => {
-        const block = keyBindings[e.key];
-        if (block) {
-          for (const line of block) {
-            await executeLine(line);
-          }
-        }
-      };
+      if (!keyBindings[key]) keyBindings[key] = [];
+      keyBindings[key].push(async () => {
+        for (const b of block) await executeLine(b);
+      });
     }
-  </script>
+    else if (line.startsWith("canvas")) {
+      clearCanvas();
+    }
+    else if (line.startsWith("move(")) {
+      // move("spriteName", dx, dy);
+      const match = line.match(/move\("([^"]+)",\s*([\-0-9]+),\s*([\-0-9]+)\)\s*;/);
+      if (match) {
+        const [_, spriteName, dx, dy] = match;
+        if (sprites[spriteName]) {
+          sprites[spriteName].x += Number(dx);
+          sprites[spriteName].y += Number(dy);
+          // Clamp inside canvas bounds
+          sprites[spriteName].x = Math.max(0, Math.min(400, sprites[spriteName].x));
+          sprites[spriteName].y = Math.max(20, Math.min(300, sprites[spriteName].y)); // 20 to allow font height
+        }
+      }
+    }
+  }
+
+  while(i < lines.length) {
+    await executeLine(lines[i]);
+    i++;
+  }
+}
+
+function startGameLoop() {
+  function loop() {
+    if (!running) return;
+    clearCanvas();
+
+    // Update logic if needed, e.g. continuous movement
+    // For now movement is handled via onKey move commands
+
+    // Draw all sprites
+    for (const key in sprites) {
+      drawSprite(sprites[key]);
+    }
+
+    gameLoopId = requestAnimationFrame(loop);
+  }
+  loop();
+}
+
+function clearButtons() {
+  document.getElementById("buttons")?.remove();
+}
+
+</script>
 </body>
 </html>
